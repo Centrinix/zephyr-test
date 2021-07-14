@@ -1,0 +1,87 @@
+name: Run all tests on specific board
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Ref (branch, tag, SHA, ...)'
+        required: true
+        default: 'main'
+      sdkver:
+        description: 'SDK Version'
+        required: true
+        default: '0.12.4'
+      board:
+        description: 'Board'
+        required: true
+        default: native_posix
+
+jobs:
+  build:
+    name: "${{ github.event.inputs.ref }} / ${{ github.event.inputs.board }} / SDK ${{ github.event.inputs.sdkver }} (${{ matrix.subset }})"
+    runs-on: [ self-hosted, linux, x64, large ]
+    strategy:
+      fail-fast: false
+      matrix:
+        subset: [ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 ]
+
+    env:
+      MATRIX_SIZE: 10
+      ZEPHYR_TOOLCHAIN_VARIANT: zephyr
+
+    steps:
+      - name: Print run information
+        run: |
+          echo "ref    = ${{ github.event.inputs.ref }}"
+          echo "sdkver = ${{ github.event.inputs.sdkver }}"
+          echo "board  = ${{ github.event.inputs.board }}"
+
+      - name: Print environment information
+        run: |
+          uname -a
+          df -h
+          cmake --version
+          ls -l ${ZEPHYR_SDK_INSTALL_DIR}
+
+      - name: Set up west
+        run: |
+          pip3 install --user west
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+
+      - name: Check out source code
+        uses: actions/checkout@v2
+        with:
+          repository: Centrinix/zephyr
+          ref: '${{ github.event.inputs.ref }}'
+          path: zephyr
+
+      - name: Check out modules
+        run: |
+          west init -l zephyr || true
+          west update
+
+      - name: Install Python dependencies
+        run: |
+          pip3 install --user -r zephyr/scripts/requirements.txt
+
+      - name: Run tests with twister
+        working-directory: zephyr
+        run: |
+          export ZEPHYR_SDK_INSTALL_DIR=/opt/zephyr-sdk-${{ github.event.inputs.sdkver }}
+          export ZEPHYR_BASE=${PWD}
+          ./scripts/twister --inline-logs -M -N -v -p ${{ github.event.inputs.board }} \
+                            --subset ${{ matrix.subset }}/${MATRIX_SIZE} \
+                            --retry-failed 3
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v2
+        with:
+          name: Test Results (Subset ${{ matrix.subset }})
+          path: zephyr/twister-out/twister.xml
+
+      - name: Clean up
+        if: always()
+        run: |
+          cd zephyr
+          git clean -dxf
